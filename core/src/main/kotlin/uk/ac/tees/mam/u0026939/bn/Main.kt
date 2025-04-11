@@ -54,7 +54,6 @@ class Character(
     var posY: Float = 0f
         private set // don't overwrite the position from outside the class
 
-
     fun update(message: Message) { // from the server or local
         posX = message.posX
         posY = message.posY
@@ -82,7 +81,7 @@ class GameScreen : KtxScreen {
     private var playerID: Int = 0
     private lateinit var tcpSocket: Socket
     private val playerColours = listOf(
-        com.badlogic.gdx.graphics.Color.WHITE,
+        com.badlogic.gdx.graphics.Color.BROWN,
         com.badlogic.gdx.graphics.Color.GREEN,
         com.badlogic.gdx.graphics.Color.BLUE,
     )
@@ -125,11 +124,10 @@ class GameScreen : KtxScreen {
             // Note: we don't know the number of players yet
             // We assign a spawn point to each player
             // We could also tweak the protocol to send the spawn points
-            val position = spawnPoints[i]
             val sprite = Sprite(playerTexture)
             sprite.color = playerColours[i]
             val character = Character(sprite, 300)
-            character.update(Message(i, position.x, position.y)) // update the position
+            character.update(Message(i, spawnPoints[i].x, spawnPoints[i].y)) // update the position
             character // return the character
         }
         // start a coroutine to receive messages in a loop
