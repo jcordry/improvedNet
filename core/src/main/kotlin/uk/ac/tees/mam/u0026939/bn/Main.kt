@@ -44,16 +44,25 @@ class Main : KtxGame<KtxScreen>() {
 // Note: this does not contain an action enum
 data class Message(var id: Int, var posX: Float, var posY: Float)
 
-class Character(var position: Vector2, private val sprite: Sprite, val speed: Int) {
+class Character(
+    private val sprite: Sprite,
+    val speed: Int
+) {
+
+    var posX: Float = 0f
+        private set // don't overwrite the position from outside the class
+    var posY: Float = 0f
+        private set // don't overwrite the position from outside the class
+
 
     fun update(message: Message) { // from the server or local
-        position.x = message.posX
-        position.y = message.posY
+        posX = message.posX
+        posY = message.posY
     }
 
     fun draw(batch: SpriteBatch) { // I like the position to be in the middle of the sprite
-        sprite.x = position.x - sprite.texture.width / 2f
-        sprite.y = position.y - sprite.texture.height / 2f
+        sprite.x = posX - sprite.texture.width / 2f
+        sprite.y = posY - sprite.texture.height / 2f
         sprite.draw(batch)
     }
 }
@@ -73,9 +82,14 @@ class GameScreen : KtxScreen {
     private var playerID: Int = 0
     private lateinit var tcpSocket: Socket
     private val playerColours = listOf(
-        com.badlogic.gdx.graphics.Color.RED,
+        com.badlogic.gdx.graphics.Color.WHITE,
         com.badlogic.gdx.graphics.Color.GREEN,
         com.badlogic.gdx.graphics.Color.BLUE,
+    )
+    private val spawnPoints = listOf(
+        Vector2(700f, 500f), // Made with 800x600 screen dimensions in mind
+        Vector2(700f, 100f),
+        Vector2(100f, 500f),
     )
 
     // We set things up
@@ -92,7 +106,7 @@ class GameScreen : KtxScreen {
         // Networking stuff
         // UDP socket
         val datagramSocket = DatagramSocket()
-        // send bcast message; HERE, we are using the localhost address, this is not really a broadcast
+        // send broadcast message; HERE, we are using the localhost address, this is not really a broadcast
         datagramSocket.send(DatagramPacket("Hello".toByteArray(), 5, InetAddress.getByName("localhost"), 4301))
         // receive message back
         val buffer = ByteArray(1024)
@@ -109,14 +123,14 @@ class GameScreen : KtxScreen {
         // Create the players
         players = List(3) { i ->
             // Note: we don't know the number of players yet
-            val position = Vector2(
-                // When the remote players starts moving, they will jump to their location
-                (Math.random() * (mapWidth - playerTexture.width)).toFloat(),
-                (Math.random() * (mapHeight - playerTexture.height)).toFloat()
-            )
+            // We assign a spawn point to each player
+            // We could also tweak the protocol to send the spawn points
+            val position = spawnPoints[i]
             val sprite = Sprite(playerTexture)
             sprite.color = playerColours[i]
-            Character(position, sprite, 300)
+            val character = Character(sprite, 300)
+            character.update(Message(i, position.x, position.y)) // update the position
+            character // return the character
         }
         // start a coroutine to receive messages in a loop
         // add messages to a queue
@@ -148,25 +162,28 @@ class GameScreen : KtxScreen {
     private fun logic(delta: Float) {
         super.show()
         val moveSpeed = delta * players[playerID].speed
-        val position = Vector2(players[playerID].position.x, players[playerID].position.y) // make a note of the position
-        if (Gdx.input.isKeyPressed(Input.Keys.W)) players[playerID].position.y += moveSpeed
-        if (Gdx.input.isKeyPressed(Input.Keys.S)) players[playerID].position.y -= moveSpeed
-        if (Gdx.input.isKeyPressed(Input.Keys.A)) players[playerID].position.x -= moveSpeed
-        if (Gdx.input.isKeyPressed(Input.Keys.D)) players[playerID].position.x += moveSpeed
-        players[playerID].position.x += touchpad.knobPercentX * moveSpeed
-        players[playerID].position.y += touchpad.knobPercentY * moveSpeed
+        // make a note of the old position
+        val oldPosition = Vector2(players[playerID].posX, players[playerID].posY)
+        // where the new position is going to be
+        val newPosition = Vector2(players[playerID].posX, players[playerID].posY)
+        if (Gdx.input.isKeyPressed(Input.Keys.W)) newPosition.y += moveSpeed
+        if (Gdx.input.isKeyPressed(Input.Keys.A)) newPosition.x -= moveSpeed
+        if (Gdx.input.isKeyPressed(Input.Keys.S)) newPosition.y -= moveSpeed
+        if (Gdx.input.isKeyPressed(Input.Keys.D)) newPosition.x += moveSpeed
+        newPosition.x += touchpad.knobPercentX * moveSpeed
+        newPosition.y += touchpad.knobPercentY * moveSpeed
 
         // Player to stay inside the screen
-        players[playerID].position.x = players[playerID].position.x.coerceIn(playerTexture.width/2f, mapWidth - playerTexture.width/2f)
-        players[playerID].position.y = players[playerID].position.y.coerceIn(playerTexture.height/2f, mapHeight - playerTexture.height/2f)
+        newPosition.x = newPosition.x.coerceIn(playerTexture.width/2f, mapWidth - playerTexture.width/2f)
+        newPosition.y = newPosition.y.coerceIn(playerTexture.height/2f, mapHeight - playerTexture.height/2f)
 
         // send message to server if required; if the position has changed, let's do things
-        if (position.x != players[playerID].position.x || position.y != players[playerID].position.y) {
-            val message = Message(playerID, players[playerID].position.x, players[playerID].position.y)
-//            players[playerID].update(message) // update the local player
+        if (oldPosition.x != newPosition.x || oldPosition.y != newPosition.y) {
+            val message = Message(playerID, newPosition.x, newPosition.y)
+            players[playerID].update(message) // update the local player
             // Note: this is not a binary message. Use this for debugging.
             // Switch to binary messages for production.
-            val bytes = "${playerID},${players[playerID].position.x},${players[playerID].position.y}".toByteArray()
+            val bytes = "${playerID},${newPosition.x},${newPosition.y}".toByteArray()
             coroutineScope.launch { // Could be done without the coroutine
                 tcpSocket.getOutputStream().write(bytes) // Blocking operation
                 tcpSocket.getOutputStream().flush()
