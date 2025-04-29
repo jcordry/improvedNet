@@ -42,27 +42,65 @@ class Main : KtxGame<KtxScreen>() {
 
 // Purposely simple message class
 // Note: this does not contain an action enum
-data class Message(var id: Int, var posX: Float, var posY: Float)
+data class Message(val id: Int, val action: Boolean, val posX: Float, val posY: Float)
 
 class Character(
     private val sprite: Sprite,
     val speed: Int
 ) {
 
+    var isSpacing: Boolean = false
+      private set
+    private val spaceCooldown = 0.4f // seconds until we can do the space action again
+    private val spaceDuration = 0.2f // How long the space action lasts
+    private var spaceTimer = 0f      // To tell when to stop drawing the Space action
+    private var cooldownTimer = 0f   // To stop spamming the space action
+    var isSpacePressed: Boolean = false
+        private set // don't overwrite the space pressed from outside the class
+    private val shapeRenderer = com.badlogic.gdx.graphics.glutils.ShapeRenderer()
+
     var posX: Float = 0f
         private set // don't overwrite the position from outside the class
     var posY: Float = 0f
         private set // don't overwrite the position from outside the class
 
+
     fun update(message: Message) { // from the server or local
         posX = message.posX
         posY = message.posY
+        isSpacePressed = message.action
     }
 
-    fun draw(batch: SpriteBatch) { // I like the position to be in the middle of the sprite
+    fun draw(batch: SpriteBatch) {
+        val delta = Gdx.graphics.deltaTime
+        if (cooldownTimer > 0f) cooldownTimer -= delta
+        if (spaceTimer > 0f) {
+            spaceTimer -= delta
+            if (spaceTimer <= 0f) {
+                isSpacing = false
+            }
+        }
+
+        // Try to do the space action
+        if (isSpacePressed && cooldownTimer <= 0f && !isSpacing) {
+            isSpacing = true
+            spaceTimer = spaceDuration
+            cooldownTimer = spaceCooldown
+        }
+
+        if (isSpacing) {
+            shapeRenderer.projectionMatrix = batch.projectionMatrix
+            shapeRenderer.color = com.badlogic.gdx.graphics.Color.ORANGE
+            shapeRenderer.begin(com.badlogic.gdx.graphics.glutils.ShapeRenderer.ShapeType.Filled)
+            shapeRenderer.circle(posX, posY, sprite.texture.width * 2f)
+        }
         sprite.x = posX - sprite.texture.width / 2f
         sprite.y = posY - sprite.texture.height / 2f
-        sprite.draw(batch)
+        shapeRenderer.end()
+        batch.use {
+            sprite.draw(it)
+        }
+
     }
 }
 
@@ -127,7 +165,7 @@ class GameScreen : KtxScreen {
             val sprite = Sprite(playerTexture)
             sprite.color = playerColours[i]
             val character = Character(sprite, 300)
-            character.update(Message(i, spawnPoints[i].x, spawnPoints[i].y)) // update the position
+            character.update(Message(i, false, spawnPoints[i].x, spawnPoints[i].y)) // update the position
             character // return the character
         }
         // start a coroutine to receive messages in a loop
@@ -138,14 +176,17 @@ class GameScreen : KtxScreen {
                 val length = inputStream.read(bytes) // Blocking operation
                 if (length > 0) {
                     val message = String(bytes, 0, length).split(",")
-                    if (message.size == 3) {
+//                    println(message)
+                    if (message.size == 4) {
                         val id = message[0].toInt()
-                        val posX = message[1].toFloat()
-                        val posY = message[2].toFloat()
+                        val spacePressed = message[1].toBoolean()
+                        val posX = message[2].toFloat()
+                        val posY = message[3].toFloat()
                         // Note we are not handling the message here.
                         // The message could have some impact on the game.
                         // We want to deal with the message in the logic method.
-                        queue.add(Message(id, posX, posY))
+//                        println("Message from server: $id, $spacePressed, $posX, $posY")
+                        queue.add(Message(id, spacePressed, posX, posY))
                     }
                 }
             }
@@ -162,6 +203,7 @@ class GameScreen : KtxScreen {
         val moveSpeed = delta * players[playerID].speed
         // make a note of the old position
         val oldPosition = Vector2(players[playerID].posX, players[playerID].posY)
+        val wasSpacePressed = players[playerID].isSpacePressed
         // where the new position is going to be
         val newPosition = Vector2(players[playerID].posX, players[playerID].posY)
         if (Gdx.input.isKeyPressed(Input.Keys.W)) newPosition.y += moveSpeed
@@ -171,24 +213,26 @@ class GameScreen : KtxScreen {
         newPosition.x += touchpad.knobPercentX * moveSpeed
         newPosition.y += touchpad.knobPercentY * moveSpeed
 
+        val isSpacePressed = Gdx.input.isKeyPressed(Input.Keys.SPACE)
+
         // Player to stay inside the screen
         newPosition.x = newPosition.x.coerceIn(playerTexture.width/2f, mapWidth - playerTexture.width/2f)
         newPosition.y = newPosition.y.coerceIn(playerTexture.height/2f, mapHeight - playerTexture.height/2f)
 
         // send message to server if required; if the position has changed, let's do things
-        if (oldPosition.x != newPosition.x || oldPosition.y != newPosition.y) {
-            val message = Message(playerID, newPosition.x, newPosition.y)
+        if (oldPosition.x != newPosition.x || oldPosition.y != newPosition.y || isSpacePressed != wasSpacePressed) {
+            val message = Message(playerID, isSpacePressed, newPosition.x, newPosition.y)
             players[playerID].update(message) // update the local player
             // Note: this is not a binary message. Use this for debugging.
             // Switch to binary messages for production.
-            val bytes = "${playerID},${newPosition.x},${newPosition.y}".toByteArray()
+            val bytes = "${playerID},${isSpacePressed},${newPosition.x},${newPosition.y}".toByteArray()
             coroutineScope.launch { // Could be done without the coroutine
                 tcpSocket.getOutputStream().write(bytes) // Blocking operation
                 tcpSocket.getOutputStream().flush()
             }
         }
 
-        // ¡clients need to have the same screen size!
+        // ¡clients all need to have the same screen size!
 
         // poll the messages from the queue
         while (queue.isNotEmpty()) {
@@ -197,15 +241,32 @@ class GameScreen : KtxScreen {
                 players[queueMsg.id].update(queueMsg) // Note if more players are added, this will not work
             }
         }
+
+        // if another player is doing the space action, and the local player is within range,
+        // then the local player position is sent to a random spawn point
+        for (i in players.indices) {
+            if (i != playerID && players[i].isSpacing) {
+                val distance = Vector2(players[playerID].posX, players[playerID].posY).dst2(Vector2(players[i].posX, players[i].posY))
+                if (distance < playerTexture.width * playerTexture.width * 4f) {
+                    // send the local player to a random spawn point
+                    val randomSpawnPoint = spawnPoints.random()
+                    players[playerID].update(Message(playerID, false, randomSpawnPoint.x, randomSpawnPoint.y))
+                    // send the message to the server
+                    val bytes = "${playerID},false,${randomSpawnPoint.x},${randomSpawnPoint.y}".toByteArray()
+                    coroutineScope.launch {
+                        tcpSocket.getOutputStream().write(bytes) // Blocking operation
+                        tcpSocket.getOutputStream().flush()
+                    }
+                }
+            }
+        }
     }
 
     private fun draw(delta: Float) {
         clearScreen(red = 0.7f, green = 0.7f, blue = 0.7f)
         stage.act(delta)
-        batch.use {
-            for (player in players) {
-                player.draw(it)
-            }
+        for (player in players) {
+            player.draw(batch)
         }
         stage.draw()
     }
