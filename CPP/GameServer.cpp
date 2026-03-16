@@ -22,7 +22,8 @@ public:
     {
         // BINDING
         sf::TcpListener listener;
-        sf::Socket::Status status = listener.listen(m_tcp_port);
+        sf::Socket::Status status = listener.listen(m_tcp_port,
+          sf::IpAddress("152.105.66.74"));
         if (status != sf::Socket::Status::Done)
         {
             std::cerr << "Error binding listener to port" << std::endl;
