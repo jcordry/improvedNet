@@ -144,14 +144,16 @@ class GameScreen : KtxScreen {
         // UDP socket
         val datagramSocket = DatagramSocket()
         // send broadcast message; HERE, we are using the localhost address, this is not really a broadcast
-        datagramSocket.send(DatagramPacket("Hello".toByteArray(), 5, InetAddress.getByName("localhost"), 4301))
+        datagramSocket.send(DatagramPacket("Hello".toByteArray(), 5, InetAddress.getByName("152.105.67.255"), 4301))
         // receive message back
         val buffer = ByteArray(1024)
         val packet = DatagramPacket(buffer, buffer.size)
-        datagramSocket.receive(packet)
+        println("Receiving UDP")
+        // datagramSocket.receive(packet)
+        print(packet.address)
         // TCP socket
         // connect to server
-        tcpSocket = Socket(packet.address, 4300)
+        tcpSocket = Socket(InetAddress.getByName("152.105.66.74"), 4300)
         // receive a message with an int from the server: this is our player ID
         val inputStream = tcpSocket.getInputStream()
         var bytes = ByteArray(4)
